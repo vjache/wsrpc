@@ -1,0 +1,15 @@
+{application, wsrpc,
+ [
+  {description, "WebSocket RPC generic application."},
+  {vsn, "0.0.1"},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib,
+		  lager,
+		  inets,
+		  cowboy
+                 ]},
+  {mod, { wsrpc_app, []}},
+  {env, []}
+ ]}.

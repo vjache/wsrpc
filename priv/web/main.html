@@ -1,0 +1,34 @@
+<!DOCTYPE HTML>
+<html>
+  <head>
+    <style>
+      body {
+        margin:  0px;
+        padding: 0px;
+      }
+    </style>
+  </head>
+  <body>
+    <table>
+      <tr><td><div id="status"></div></td></tr>
+      <tr>
+	<td><div id="container"></div></td>
+	<td>
+	</td>
+      </tr>
+    </table>
+
+    <script src="web/js/wsrpc.js"></script>
+
+    <script defer="defer">
+      var srv = new wsrpc.Service(
+		      {path: "echo/ppp/ppp1",
+		       status_listener:function(text)
+		       {
+		        var date = new Date();
+		        document.getElementById('status').innerHTML = 
+		        "<p style=\"color:#aaaaaa\">" + date.toTimeString() + ": " + text + "</p>";
+		       }})
+    </script> 
+  </body>
+</html>
