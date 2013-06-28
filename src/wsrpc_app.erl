@@ -6,6 +6,10 @@
 -export([start/2, stop/1]).
 -export([start/0, read_priv_file/1, make_lager_message/1]).
 
+-include("log.hrl").
+
+-define(APPLICATION, wsrpc).
+
 start() ->
     start_recursive(wsrpc).
 
@@ -72,24 +76,94 @@ get_priv_file(RelFilename) ->
 
 start_webserver() ->
     Dispatch = cowboy_router:compile(
-		 [ {'_', [
-			  {"/echo/[...]", wsrpc_handler, [{resolver, wsrpc_gs_resolver}]},
-			  {"/", cowboy_static, 
-			   [
-			    {directory, {priv_dir, wsrpc, []}},
-			    {file, "web/main.html"},
-			    {mimetypes, {fun mimetypes:path_to_mimes/2, default}}
-			   ]},
-			  {"/[...]", 
-			   cowboy_static, 
-			   [{directory, {priv_dir, wsrpc, []}},
-			    {mimetypes, {fun mimetypes:path_to_mimes/2, default}}
-			   ]}
-			 ]}
-		 ]),
+		 [{'_', 
+		   [{"/wsrpc.js", cowboy_static, 
+		     [
+		      {directory, {priv_dir, wsrpc, []}},
+		      {file, "web/js/wsrpc.js"},
+		      {mimetypes, {fun mimetypes:path_to_mimes/2, default}}
+		     ]} 
+		    | make_dispatch()]
+		  }]),
+    HttpPort = get_env({http_port, integer}, 8585),
+    ?LOG_INFO([{start_http_server, cowboy}, {port, HttpPort}]),
     {ok, _} = cowboy:start_http(
-		http, 1, [{port, 8585}],
+		http, 1, [{port, HttpPort}],
 		[{env, [{dispatch, Dispatch}]}]).
+
+make_dispatch() ->
+    Apps = get_env({apps, list}, [wsrpc]),
+    MakeAppDispatch = 
+	fun(AppName, Services, MainHtml) ->
+		CommInfo = [dispatch_rule, {app, AppName}],
+		AppNameStr = atom_to_list(AppName),
+		case application:load(AppName) of
+		    ok -> ok;
+		    {error, {already_loaded,_}} -> ok
+		end,
+		MakeServiceDispatch = 
+		    fun(ServiceDispatchRule, Resolver) ->
+			    ?LOG_INFO(CommInfo ++
+					  [{service_resolver, Resolver},
+					   {service_web_path, ServiceDispatchRule}]),
+			    {ServiceDispatchRule, 
+			     wsrpc_handler, 
+			     [{resolver, Resolver}]}
+		    end,
+		AppWebPath = "/" ++ AppNameStr,
+		[begin
+		     ?LOG_INFO(CommInfo ++
+				   [{main_html_web_path, AppWebPath}, 
+				    {main_html_file, MainHtml}]),
+		     {AppWebPath, cowboy_static, 
+			     [
+			      {directory, {priv_dir, AppName, []}},
+			      {file, MainHtml},
+			      {mimetypes, {fun mimetypes:path_to_mimes/2, default}}
+			     ]}
+		 end] ++
+		    [ case Service of
+			  {Resolver, ServiceDispatchRule} ->
+			      MakeServiceDispatch(ServiceDispatchRule, Resolver);
+			  Resolver when is_atom(Resolver) ->
+			      MakeServiceDispatch(
+				AppWebPath ++ "/" ++ atom_to_list(Resolver) ++ "/[...]", 
+				Resolver)
+		      end || Service <- Services]
+	end,	      
+    lists:flatten(
+      [ case App of
+	    _ when is_atom(App) ->
+		MakeAppDispatch(App, [], "web/main.html");
+	    {AppName, Opts} when is_atom(AppName), is_list(Opts) ->
+		MakeAppDispatch(AppName, 
+				proplists:get_value(services, Opts, []), 
+				proplists:get_value(main_html, Opts, "web/main.html"))
+	end || App <- Apps]).
+    
+
+%% get_env(VarName) ->
+%%     get_env(VarName,fun()-> throw({var_not_configured,VarName}) end).
+
+get_env({VarName, TypeToCheck} = Spec, Fallback) ->
+    Val = get_env(VarName, Fallback),
+    Succ = case TypeToCheck of
+	integer -> is_integer(Val);
+	atom    -> is_atom(Val);
+	list    -> is_list(Val);
+	binary  -> is_binary(Val);
+	tuple   -> is_tuple(Val)
+    end,
+    not Succ andalso exit({badtype, Spec, Val}),
+    Val;
+get_env(VarName, Fallback) ->
+    case application:get_env(?APPLICATION,VarName) of
+        {ok, Value} -> Value;
+        undefined -> 
+            if is_function(Fallback) -> Fallback();
+               true -> Fallback
+            end
+    end.
 
 
 make_lager_message(Report) when is_list(Report) ->
