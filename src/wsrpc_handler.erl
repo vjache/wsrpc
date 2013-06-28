@@ -41,12 +41,12 @@
 init({_Any, http}, Req, Opts) ->
     ?LOG_INFO([{options, Opts}]),
     DoWsUpgrade = fun() -> 
-			  ?LOG_INFO([{ws_upgrade, Req}]),
+			  ?LOG_DEBUG([{ws_upgrade, Req}]),
 			  {upgrade, protocol, cowboy_websocket} 
 		  end,
     case cowboy_req:header(<<"upgrade">>, Req) of
 	{undefined, Req2} ->
-	    ?LOG_INFO([ordinary_http_req]),
+	    ?LOG_DEBUG([ordinary_http_req]),
 	    {ok, Req2, undefined};
 	{<<"websocket">>, _Req2} ->
 	    DoWsUpgrade();
@@ -55,7 +55,7 @@ init({_Any, http}, Req, Opts) ->
     end.
 
 handle(Req, State) ->
-    ?LOG_INFO([{handle, Req}]),
+    ?LOG_DEBUG([{handle, Req}]),
     %% {ok, Req2} = cowboy_req:reply(
     %% 		   200, [{<<"content-type">>, <<"text/html">>}],
     %% 		   xenob_app:read_
@@ -63,7 +63,7 @@ handle(Req, State) ->
     {ok, Req, State}.
 
 terminate(Reason, _Req, _State) ->
-    ?LOG_INFO([http_terminate, 
+    ?LOG_DEBUG([http_terminate, 
 	       {reason, Reason},
 	       {state, _State}]),
      ok.
@@ -76,15 +76,15 @@ websocket_init(_Any, Req, Opts) ->
     {ServicePath, _} = cowboy_req:path_info(Req),
     RMod    = proplists:get_value(resolver, Opts, wsrpc_simple_resolver),
     Service = RMod:resolve(ServicePath),
-    ?LOG_INFO([{ws_init, ServicePath, Opts}]),
+    ?LOG_DEBUG([{ws_init, ServicePath, Opts}]),
     {ok, 
      cowboy_req:compact(Req), 
      #state{service = Service}, hibernate}.
 
 websocket_handle({text, JsonCmd}, Req, State) ->
-    ?LOG_INFO([{cmd_recv, JsonCmd}]),
+    ?LOG_DEBUG([{cmd_recv, JsonCmd}]),
     Reply=fun(JSONData, State1) ->
-		  ?LOG_INFO([{jsx_data, JSONData}]),
+		  ?LOG_DEBUG([{jsx_data, JSONData}]),
 		  {reply, {text, to_json(JSONData)}, Req, State1} 
 	  end,
     case handle_command(parse_json_command(JsonCmd), State) of
@@ -99,9 +99,9 @@ websocket_info({'DOWN', _MRef, process, Pid, Reason},
 	       Req, #state{streams = Streams} = State) ->
     case lists:keytake(Pid, #stream_info.pid, Streams) of 
 	{value, #stream_info{rid = Rid}, Streams1} ->
-	    ?LOG_INFO([{streamer_terminated, Pid}, 
-		       {rid, Rid}, 
-		       {reason,Reason}]),
+	    ?LOG_DEBUG([{streamer_terminated, Pid}, 
+			{rid, Rid}, 
+			{reason,Reason}]),
 	    {reply, 
 	     {text, 
 	      to_json([?sp(type, "stream-end"), 
@@ -111,7 +111,7 @@ websocket_info({'DOWN', _MRef, process, Pid, Reason},
     end;
 websocket_info({jsx_stream, _, _} = Info, Req, State) ->
     Reply=fun(JsxData) ->		  
-		  ?LOG_INFO([{jsx_data, JsxData}]),
+		  ?LOG_DEBUG([{jsx_data, JsxData}]),
 		  {reply, {text, to_json(JsxData)}, Req, State}
 	  end,
     JsxData = handle_stream_data(Info, State),
@@ -149,14 +149,14 @@ to_pretty_binary(Term) ->
 handle_command(#rpc_request{type = 'notify',  
 			    data = Data} = Req,
 	       #state{service = Service} = State) ->
-    ?LOG_INFO([{rpc_request, Req}]),
+    ?LOG_DEBUG([{rpc_request, Req}]),
     ok = cast_service(Service, Data),
     {noreply, State};
 handle_command(#rpc_request{type = 'call', 
 			    rid  = Rid, 
 			    data = Data} = Req,
 	       #state{service = Service, streams = Streams} = State) ->
-    ?LOG_INFO([{rpc_request, Req}]),
+    ?LOG_DEBUG([{rpc_request, Req}]),
     case call_service(Service, Data) of
 	{jsx, ReplyJsxData} ->
 	     {[?sp(type, "result"),
@@ -192,7 +192,8 @@ cast_service({mfa, _Mod, _Func, _Args}, _Data) ->
 
 parse_json_command(Json) ->
     JsonData = jsx:decode(Json),
-    Type     = binary_to_existing_atom(proplists:get_value(<<"type">>, JsonData), latin1),
+    Type     = binary_to_existing_atom(
+		 proplists:get_value(<<"type">>, JsonData), latin1),
     Rid      = proplists:get_value(<<"rid">>, JsonData),
     true     = is_integer(Rid),
     Data     = proplists:get_value(<<"data">>, JsonData),
