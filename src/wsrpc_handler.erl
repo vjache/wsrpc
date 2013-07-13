@@ -39,7 +39,7 @@
 %%
 
 init({_Any, http}, Req, Opts) ->
-    ?LOG_INFO([{options, Opts}]),
+    ?LOG_DEBUG([{options, Opts}]),
     DoWsUpgrade = fun() -> 
 			  ?LOG_DEBUG([{ws_upgrade, Req}]),
 			  {upgrade, protocol, cowboy_websocket} 
@@ -55,7 +55,7 @@ init({_Any, http}, Req, Opts) ->
     end.
 
 handle(Req, State) ->
-    ?LOG_DEBUG([{handle, Req}]),
+    ?LOG_DEBUG([{http_handle, Req}]),
     %% {ok, Req2} = cowboy_req:reply(
     %% 		   200, [{<<"content-type">>, <<"text/html">>}],
     %% 		   xenob_app:read_
@@ -82,9 +82,9 @@ websocket_init(_Any, Req, Opts) ->
      #state{service = Service}, hibernate}.
 
 websocket_handle({text, JsonCmd}, Req, State) ->
-    ?LOG_DEBUG([{cmd_recv, JsonCmd}]),
+    ?LOG_DEBUG([{request, JsonCmd}]),
     Reply=fun(JSONData, State1) ->
-		  ?LOG_DEBUG([{jsx_data, JSONData}]),
+		  ?LOG_DEBUG([reply, {jsx_data, JSONData}]),
 		  {reply, {text, to_json(JSONData)}, Req, State1} 
 	  end,
     case handle_command(parse_json_command(JsonCmd), State) of
@@ -99,7 +99,7 @@ websocket_info({'DOWN', _MRef, process, Pid, Reason},
 	       Req, #state{streams = Streams} = State) ->
     case lists:keytake(Pid, #stream_info.pid, Streams) of 
 	{value, #stream_info{rid = Rid}, Streams1} ->
-	    ?LOG_DEBUG([{streamer_terminated, Pid}, 
+	    ?LOG_ERROR([{streamer_terminated, Pid}, 
 			{rid, Rid}, 
 			{reason,Reason}]),
 	    {reply, 
@@ -111,7 +111,7 @@ websocket_info({'DOWN', _MRef, process, Pid, Reason},
     end;
 websocket_info({jsx_stream, _, _} = Info, Req, State) ->
     Reply=fun(JsxData) ->		  
-		  ?LOG_DEBUG([{jsx_data, JsxData}]),
+		  ?LOG_DEBUG([notify, {jsx_data, JsxData}]),
 		  {reply, {text, to_json(JsxData)}, Req, State}
 	  end,
     JsxData = handle_stream_data(Info, State),
@@ -172,10 +172,10 @@ handle_command(#rpc_request{type = 'call',
 	      ?p(rid, Rid),
 	      ?p(data, ReplyJsxData)],
 	     State#state{streams = Streams1}};
-	{error, Reason} ->
+	{error, JsxReason} ->
 	    {[?sp(type, "error"),
 	       ?p(rid, Rid),
-	       ?p(data, to_pretty_binary(Reason) )], 
+	       ?p(data, JsxReason )], 
 	     State}
     end.
 
