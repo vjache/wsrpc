@@ -1,11 +1,17 @@
 var wsrpc = {};
 
+if (global !=null)
+    global.wsrpc = wsrpc;
+
 wsrpc.Service = function(conf){
     this.status_listener = conf.status_listener;
     this.calls = {};
     var calls = this.calls;
     this.next_rid = 0;
-    this.url = document.URL.replace("http","ws") + conf.path;
+    if(conf.url != null)
+	this.url = conf.url;
+    else
+	this.url = document.URL.replace("http","ws") + conf.path;
     if ("MozWebSocket" in window) 
     {
         WebSocket = MozWebSocket;
@@ -16,7 +22,7 @@ wsrpc.Service = function(conf){
 	this.ws = ws;
         ws.onopen = function() {
             // websocket is connected
-            conf.status_listener("service connected!");
+            conf.status_listener("connected");
         };
 	
 	ws.onmessage = function (evt) {
@@ -36,7 +42,7 @@ wsrpc.Service = function(conf){
 	};
 	ws.onclose = function() {
             // websocket was closed
-            conf.status_listener("websocket was closed"); 
+            conf.status_listener("disconnected"); 
 	};
     } else {
 	// browser does not support websockets
