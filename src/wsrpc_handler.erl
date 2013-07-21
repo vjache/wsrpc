@@ -16,23 +16,35 @@
 	 websocket_info/3, 
 	 websocket_terminate/3]).
 
--define(s(V), <<V>>).
--define(p(K,V), {K,V}).
--define(sp(K,V), ?p(K, ?s(V))).
+-export([stream/2]).
 
+%% WebSocket Handler state
 -record(state, {service :: {gen_server, pid()} | 
 			   {mfa, 
 			    Mod :: atom(), 
 			    Func :: atom(), 
 			    MandatoryArgs :: [] },
-		streams = []}).
+		streams = [],
+		types_cache}).
 
--record(stream_info, {pid, rid}).
+%% Streams tracking record
+-record(stream_info,   {rid, pid, mref}).
 
--record(rpc_request, 
-	{type :: 'call' | 'call-stream' | 'notify', 
-	 rid  :: integer(), 
-	 data :: any()}).
+%% Protocol Messages
+-record('stream-item', {rid, data}).
+-record('stream-end',  {rid, data}).
+-record(call, {rid, data}).
+
+-define(t(Type), {Type, record_info(fields, Type)}).
+-define(tx(Record, Props),
+        {Record, [ case lists:keyfind(__F, 1, Props) of
+                       false ->
+			   __F;
+		       __T   -> __T
+                   end || __F <- record_info(fields, Record)]}).
+
+stream({Pid, Tag} = _From, Msg) ->
+    Pid ! { {stream_continue, Tag, self()}, Msg}, ok.
 
 %%
 %% Ordinary HTTP paragraph
@@ -56,10 +68,6 @@ init({_Any, http}, Req, Opts) ->
 
 handle(Req, State) ->
     ?LOG_DEBUG([{http_handle, Req}]),
-    %% {ok, Req2} = cowboy_req:reply(
-    %% 		   200, [{<<"content-type">>, <<"text/html">>}],
-    %% 		   xenob_app:read_
-%%		   priv_file("web-ui/main.html"), Req),
     {ok, Req, State}.
 
 terminate(Reason, _Req, _State) ->
@@ -74,48 +82,82 @@ terminate(Reason, _Req, _State) ->
 
 websocket_init(_Any, Req, Opts) ->
     {ServicePath, _} = cowboy_req:path_info(Req),
-    RMod    = proplists:get_value(resolver, Opts, wsrpc_simple_resolver),
+    RMod    = proplists:get_value(resolver, Opts, wsrpc_gs_resolver),
     Service = RMod:resolve(ServicePath),
+    case Service of
+	{gen_server, Pid} -> erlang:monitor(process, Pid);
+	_ -> ok
+    end,
     ?LOG_DEBUG([{ws_init, ServicePath, Opts}]),
+    TyCache = dict:from_list(
+		[?t('call'),
+		 ?t('stream-item'),
+		 ?t('stream-end')]),
     {ok, 
      cowboy_req:compact(Req), 
-     #state{service = Service}, hibernate}.
+     #state{service     = Service, 
+	    types_cache = TyCache },
+     hibernate}.
 
-websocket_handle({text, JsonCmd}, Req, State) ->
-    ?LOG_DEBUG([{request, JsonCmd}]),
-    Reply=fun(JSONData, State1) ->
-		  ?LOG_DEBUG([reply, {jsx_data, JSONData}]),
-		  {reply, {text, to_json(JSONData)}, Req, State1} 
-	  end,
-    case handle_command(parse_json_command(JsonCmd), State) of
-	{noreply,   State1} -> {noreply, Req, State1};
-	{JSONReply, State1} ->  Reply(JSONReply, State1)
+%%@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+websocket_handle({text, Json}, Req, 
+		 #state{streams     = Streams, 
+			types_cache = TyCache, 
+			service = {gen_server, Pid}} = State) ->
+    ?LOG_DEBUG([{msg_rcv, Json}]),
+    Jsx = jsx:decode(Json),
+    ?LOG_DEBUG([{msg_jsxed, Jsx}]),
+    case jsx_util:from_jsx(Jsx, TyCache, 
+			   fun(Type)-> get_type(State, Type) end) of
+	{#call{rid = Rid, data = Data} = Call, 
+	 TyCache1} ->
+	    ?LOG_DEBUG([{msg_parsed, Call}]),
+	    lists:keymember(Rid, #stream_info.rid, Streams) andalso exit(rid_clash),
+	    Mref = Rid,
+	    Pid ! {'$gen_call', {self(), Mref}, Data },
+	    Streams1 = [#stream_info{rid = Rid} | Streams],
+	    {ok, Req, State#state{streams = Streams1, types_cache = TyCache1} }
     end;
+%%@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 websocket_handle(_Any, Req, State) ->
     ?LOG_ERROR([{unexpected_cmd, _Any}]),
     {ok, Req, State}.
 
+%% Handle service termination
 websocket_info({'DOWN', _MRef, process, Pid, Reason}, 
+	       _Req, #state{service = {gen_server, Pid} } = _State) ->
+    exit(Reason);
+%% Handle streams termination
+websocket_info({'DOWN', Mref, process, Pid, Reason}, 
 	       Req, #state{streams = Streams} = State) ->
-    case lists:keytake(Pid, #stream_info.pid, Streams) of 
-	{value, #stream_info{rid = Rid}, Streams1} ->
-	    ?LOG_ERROR([{streamer_terminated, Pid}, 
-			{rid, Rid}, 
-			{reason,Reason}]),
-	    {reply, 
-	     {text, 
-	      to_json([?sp(type, "stream-end"), 
-		       ?p(rid, Rid) ]) }, Req, State#state{streams = Streams1}};
-	false ->
-	    {noreply, Req, State}
-    end;
-websocket_info({jsx_stream, _, _} = Info, Req, State) ->
-    Reply=fun(JsxData) ->		  
-		  ?LOG_DEBUG([notify, {jsx_data, JsxData}]),
-		  {reply, {text, to_json(JsxData)}, Req, State}
-	  end,
-    JsxData = handle_stream_data(Info, State),
-    Reply(JsxData).
+    {value, #stream_info{ pid = Pid, rid = Rid}, Streams1} = 
+	lists:keytake(Mref, #stream_info.mref, Streams),
+    ?LOG_DEBUG([{stream_terminated, Pid}, 
+		{rid, Rid}, 
+		{reason, Reason}]),
+    Reply = #'stream-end'{rid = Rid, data = null},
+    make_reply(Reply, Req, State#state{streams = Streams1});
+%% Handle Replies
+websocket_info({ Tag, Data}, 
+	       Req, #state{streams = Streams} = State) ->
+    case Tag of
+	{stream_continue, Rid, Pid1} -> 
+	    Streams1 = lists_keyupsert(
+			 Rid, #stream_info.rid, Streams, 
+			 fun(#stream_info{pid = Pid0} = SInfo) ->
+				 if Pid0 == undefined ->
+					 Mref = erlang:monitor(process, Pid1),
+					 SInfo#stream_info{pid = Pid1, mref = Mref};
+				    Pid0 == Pid1, is_pid(Pid0) -> 
+					 SInfo
+				 end
+			 end),
+	    Reply    = #'stream-item'{rid = Rid, data = Data};
+	Rid -> 
+	    {value, _, Streams1} = lists:keytake(Rid, #stream_info.rid, Streams),
+	    Reply = #'stream-end'{rid = Rid, data = Data} 
+    end,
+    make_reply(Reply, Req, State#state{streams = Streams1}).
 
 websocket_terminate(TermMsg, _Req, _State) ->
     case TermMsg of
@@ -126,81 +168,28 @@ websocket_terminate(TermMsg, _Req, _State) ->
     end.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%
+% Helper functions
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-handle_stream_data(
-  {jsx_stream, Data, StreamPid} = Msg, 
-  #state{streams = Streams}) ->
-    case lists:keyfind(StreamPid, #stream_info.pid, Streams) of
-	#stream_info{rid = Rid} ->
-	    [?sp(type, "stream-item"), 
-	     ?p(rid,Rid), 
-	     ?p(data,Data)];
-	false ->
-	    ?LOG_ERROR([{bad_stream, StreamPid}, {data, Msg}]),
-	    exit({bad_stream, StreamPid})
-    end.
+get_type(#state{service = {gen_server, Pid} }, Type) ->
+    gen_server:call(Pid, {get_type, Type}).
 
-to_pretty_binary(Term) ->
-    list_to_binary(
-      io_lib:format("~p", [Term] )).
+make_reply(ReplyObj, Req, #state{types_cache = TyCache} = State) ->
+    {Jsx, TyCache1} = jsx_util:to_jsx(
+			ReplyObj, TyCache, 
+			fun(Type)-> get_type(State, Type) end),
+    {reply, {text, jsx:encode(Jsx)}, 
+     Req, State#state{types_cache = TyCache1} }.
 
-handle_command(#rpc_request{type = 'notify',  
-			    data = Data} = Req,
-	       #state{service = Service} = State) ->
-    ?LOG_DEBUG([{rpc_request, Req}]),
-    ok = cast_service(Service, Data),
-    {noreply, State};
-handle_command(#rpc_request{type = 'call', 
-			    rid  = Rid, 
-			    data = Data} = Req,
-	       #state{service = Service, streams = Streams} = State) ->
-    ?LOG_DEBUG([{rpc_request, Req}]),
-    case call_service(Service, Data) of
-	{jsx, ReplyJsxData} ->
-	     {[?sp(type, "result"),
-	       ?p(rid, Rid),
-	       ?p(data, ReplyJsxData)],
-	      State};
-	{jsx_stream, ReplyJsxData, StreamPid} ->
-	    % Ensure there is no two streamers with the same Pid
-	    false = lists:keyfind(StreamPid, #stream_info.pid, Streams),
-	    erlang:monitor(process, StreamPid),
-	    Streams1 = [#stream_info{pid=StreamPid,rid=Rid} | Streams],
-	    {[?sp(type, "stream-start"),
-	      ?p(rid, Rid),
-	      ?p(data, ReplyJsxData)],
-	     State#state{streams = Streams1}};
-	{error, JsxReason} ->
-	    {[?sp(type, "error"),
-	       ?p(rid, Rid),
-	       ?p(data, JsxReason )], 
-	     State}
-    end.
+lists_keyupsert(_Key, _N, [], Fun) ->
+    case Fun(undefined) of
+	undefined -> [];
+	NewTup when is_tuple(NewTup) ->
+	    [NewTup]
+    end;
+lists_keyupsert(Key, N, [T | L], Fun) when element(N, T) == Key ->
+    [Fun(T) | L];
+lists_keyupsert(Key, N, [T | L], Fun) ->
+    [T | lists_keyupsert(Key, N, L, Fun)].
 
-call_service({gen_server, Pid}, Data) ->
-    gen_server:call(Pid, Data);
-call_service({mfa, Mod, Func, Args}, Data) ->
-    erlang:apply(Mod, Func, Args ++ [Data]).
-
-cast_service({gen_server, Pid}, Data) ->
-    ok = gen_server:cast(Pid, Data);
-cast_service({mfa, _Mod, _Func, _Args}, _Data) ->
-    {error, cast_not_supported}.
-
-
-parse_json_command(Json) ->
-    JsonData = jsx:decode(Json),
-    Type     = binary_to_existing_atom(
-		 proplists:get_value(<<"type">>, JsonData), latin1),
-    Rid      = proplists:get_value(<<"rid">>, JsonData),
-    true     = is_integer(Rid),
-    Data     = proplists:get_value(<<"data">>, JsonData),
-    #rpc_request{type = Type,
-		 rid  = Rid,
-		 data = Data}.
-
-to_json(JsonData) ->
-    jsx:encode(JsonData).
  

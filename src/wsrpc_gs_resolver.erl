@@ -10,6 +10,8 @@
 
 -behaviour(gen_server).
 
+-include("log.hrl").
+
 %% API
 -export([start_link/0, resolve/1]).
 
@@ -24,6 +26,8 @@
 -define(SERVER, ?MODULE). 
 
 -record(state, {}).
+-record(echo, {text}).
+-record(timer, {period, label}).
 
 
 %%%===================================================================
@@ -36,7 +40,6 @@ start_link() ->
 %%%===================================================================
 %%% wsrpc resolver callback function.
 %%%===================================================================
-
 resolve(_ServicePath) ->
     {ok, Pid} = start_link(),
     {gen_server, Pid}.
@@ -49,31 +52,31 @@ resolve(_ServicePath) ->
 init([]) ->
     {ok, #state{}}.
 
-handle_call(JsxMesg, {Pid, _} = _From, State) ->
-    case proplists:get_value(<<"method">>,JsxMesg) of
-	<<"subscribe">> -> 
-	    SPid = spawn(fun()->
-				 [begin 
-				      Pid ! {jsx_stream, 
-					     [{tick, N}], 
-					     self() },
-				      timer:sleep(1000)
-				  end|| N <- lists:seq(1,10)]
-			 end),
-	    {reply, {jsx_stream, null, SPid}, State};
-	<<"error">> ->
-	    {reply, {error, test_error}, State};
-	_ ->
-	    {reply, {jsx, JsxMesg}, State}
-    end.
+handle_call({get_type, Type}, _From, State) ->
+    {reply, case Type of
+		echo  -> record_info(fields, echo);
+		timer -> record_info(fields, timer)
+	    end, 
+     State};
+handle_call(#echo{text = Text} = Msg, _From, State) ->
+    {reply, Msg#echo{text = <<Text/binary,Text/binary>>}, State};
+handle_call(#timer{period = Per} = Msg, From, State) ->
+    ?LOG_DEBUG([call_timer, Msg]),
+    Res = timer:send_interval(
+      Per, {Msg, From}),
+    ?LOG_DEBUG([{timer_started, Res}]),
+    {noreply, State}.
 
 handle_cast(_Msg, State) ->
     {noreply, State}.
-
+handle_info({#timer{label = Lab}, From}, State) ->
+    wsrpc_handler:stream(From, Lab),
+    {noreply, State};
 handle_info(_Info, State) ->
     {noreply, State}.
 
-terminate(_Reason, _State) ->
+terminate(Reason, _State) ->
+    ?LOG_DEBUG([service_terminated, Reason]),
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
