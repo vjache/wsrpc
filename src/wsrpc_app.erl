@@ -85,16 +85,18 @@ start_webserver() ->
 		     ]} 
 		    | make_dispatch()]
 		  }]),
+    ?LOG_DEBUG([{dispatch_rules, Dispatch}]),
     HttpPort = get_env({http_port, integer}, 8585),
     ?LOG_INFO([{start_http_server, cowboy}, {port, HttpPort}]),
     {ok, _} = cowboy:start_http(
 		http, 1, [{port, HttpPort}],
-		[{env, [{dispatch, Dispatch}]}]).
+		[{env, [{dispatch, Dispatch}]},
+		 {onrequest, fun(Req) -> ?LOG_DEBUG([request, Req]), Req end}]).
 
 make_dispatch() ->
     Apps = get_env({apps, list}, [wsrpc]),
     MakeAppDispatch = 
-	fun(AppName, Services, MainHtml) ->
+	fun(AppName, Services) ->
 		CommInfo = [dispatch_rule, {app, AppName}],
 		AppNameStr = atom_to_list(AppName),
 		case application:load(AppName) of
@@ -111,34 +113,36 @@ make_dispatch() ->
 			     [{resolver, Resolver}]}
 		    end,
 		AppWebPath = "/" ++ AppNameStr,
-		[begin
-		     ?LOG_INFO(CommInfo ++
-				   [{main_html_web_path, AppWebPath}, 
-				    {main_html_file, MainHtml}]),
-		     {AppWebPath, cowboy_static, 
-			     [
-			      {directory, {priv_dir, AppName, []}},
-			      {file, MainHtml},
-			      {mimetypes, {fun mimetypes:path_to_mimes/2, default}}
-			     ]}
-		 end] ++
-		    [ case Service of
-			  {Resolver, ServiceDispatchRule} ->
-			      MakeServiceDispatch(ServiceDispatchRule, Resolver);
-			  Resolver when is_atom(Resolver) ->
-			      MakeServiceDispatch(
-				AppWebPath ++ "/" ++ atom_to_list(Resolver) ++ "/[...]", 
-				Resolver)
-		      end || Service <- Services]
+		
+		[ case Service of
+		      {Resolver, ServiceDispatchRule} ->
+			  MakeServiceDispatch(ServiceDispatchRule, Resolver);
+		      Resolver when is_atom(Resolver) ->
+			  MakeServiceDispatch(
+			    AppWebPath ++ "/" ++ atom_to_list(Resolver) ++ "/[...]", 
+			    Resolver)
+		  end || Service <- Services] ++ 
+		    [begin
+			 AppStaticsWebPath = AppWebPath ++ "/[...]",
+			 ?LOG_INFO(CommInfo ++
+				       [{static_resources, 
+					 {dir, filename:join([AppName, priv, web])},
+					 {web_path, AppStaticsWebPath}
+					}]),
+			 {AppStaticsWebPath, cowboy_static, 
+			  [
+			   {directory, {priv_dir, AppName, [<<"web">>]}},
+			   {mimetypes, {fun mimetypes:path_to_mimes/2, default}}
+			  ]}
+		     end]
 	end,	      
     lists:flatten(
       [ case App of
 	    _ when is_atom(App) ->
-		MakeAppDispatch(App, [], "web/main.html");
+		MakeAppDispatch(App, []);
 	    {AppName, Opts} when is_atom(AppName), is_list(Opts) ->
 		MakeAppDispatch(AppName, 
-				proplists:get_value(services, Opts, []), 
-				proplists:get_value(main_html, Opts, "web/main.html"))
+				proplists:get_value(services, Opts, []))
 	end || App <- Apps]).
     
 
