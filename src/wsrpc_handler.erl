@@ -21,7 +21,7 @@
 %% WebSocket Handler state
 -record(state, {service :: {gen_server, pid()} | 
 			   {mfa, 
-			    Mod :: atom(), 
+			    Mod  :: atom(), 
 			    Func :: atom(), 
 			    MandatoryArgs :: [] },
 		streams = [],
