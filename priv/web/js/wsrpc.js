@@ -1,17 +1,17 @@
 var wsrpc = {};
 
-if (global !=null)
-    global.wsrpc = wsrpc;
-
 wsrpc.Service = function(conf){
     this.status_listener = conf.status_listener;
     this.calls = {};
     var calls = this.calls;
     this.next_rid = 0;
+
+    //this.url = document.URL.replace("http","ws") + conf.path;
     if(conf.url != null)
 	this.url = conf.url;
     else
-	this.url = document.URL.replace("http","ws") + conf.path;
+	throw("no_url");
+
     if ("MozWebSocket" in window) 
     {
         WebSocket = MozWebSocket;
@@ -26,18 +26,15 @@ wsrpc.Service = function(conf){
         };
 	
 	ws.onmessage = function (evt) {
-            conf.status_listener("server sent the following: '" + 
-				 evt.data + "'");
-            var data = JSON.parse(evt.data);
-	    var rid = data.rid;
+//console.log(msg_text);
+            var msg = JSON.parse(evt.data);
+	    var rid = msg.rid;
 	    if(rid == null) 
-		throw("Bad reply: " + evt.data);
-
-	    calls[rid].onreply(data);
-
-	    if(data.type == "stream-end" || 
-	       data.type == "result" || 
-	       data.type == "error") 
+		throw("No request ID (RID): " + msg);
+	    
+	    calls[rid].onreply(msg.data);
+	    
+	    if(msg.type == "stream-end") 
 		delete calls[rid];
 	};
 	ws.onclose = function() {
