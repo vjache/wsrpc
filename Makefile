@@ -14,5 +14,10 @@ test: force
 test_js:
 	env NODE_PATH=priv/node_modules mocha
 
+run: clean compile
+	./start.sh
+
 clean:
 	@$(REBAR) clean
+	rm -rf log/
+	rm -rf logs/
