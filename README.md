@@ -17,7 +17,6 @@ To make your gen_server's callable via 'wsrpc' you must:
 
 The resolver is a module with a function:
 
-:::erlang
    '-spec resolve(ServicePath :: [ binary() ]) -> {gen_server, pid()} .'
 
 Actually this function may reside in any module you want, the only purpose 
@@ -28,7 +27,7 @@ your resolver. For example let we have an application 'my_app' in which we
 have a resolver 'my_services', then the configuration section may look 
 like following:
 
-:::erlang
+'
    ...
    {wsrpc, [  {http_port, 8484}, 
               {apps, [
@@ -37,7 +36,7 @@ like following:
            ]
    },
    ...
-
+'
 
 The third step is described in a next section.
 
@@ -46,26 +45,25 @@ The third step is described in a next section.
 WSRPC require some help from you to be able to map record to JSON and back. 
 You must support a special additional call in your 'gen_server':
 
-:::erlang
-   handle_call({get_type, RecordName}, _From, State) ->
+  ' handle_call({get_type, RecordName}, _From, State) ->
     {reply, [field1, field2, field3] , State};
-   ...
+    ...'
 
 I.e. your server must be ready to reply a field list for requested record 
 name if your server uses this record in its calls. All records in use, 
 will be mapped to/from JSON in a strict way. For example let we have a 
 record like:
 
-:::erlang
-    #message{ id = 0, operation = "call_smth_useful", args = ["data1", "data2"]}
+   ' #message{ id = 0, operation = "call_smth_useful", args = ["data1", "data2"]}'
 
 then it will be mapped to JSON as:
 
-:::json
+'
     { "id"        : 0,
       "type"      : "message",
       "operation" : "call_smth_useful", 
       "args"      : [ "data1", "data2" ] }
+'
 
 and vise versa.
 
