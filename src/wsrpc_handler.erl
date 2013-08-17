@@ -102,8 +102,6 @@ init({_Any, http}, Req, Opts) ->
     case cowboy_req:header(<<"upgrade">>, Req) of
 	{undefined, _Req2} ->
 	    rest_init(Req, Opts);
-	    %% ?LOG_DEBUG([{rest_upgrade, Req}]),
-	    %% {upgrade, protocol, cowboy_rest};
 	{<<"websocket">>, _Req2} ->
 	    DoWsUpgrade();
 	{<<"WebSocket">>, _Req2} ->
@@ -158,12 +156,21 @@ terminate(Reason, _Req, _State) ->
 %% REST paragraph
 %%------------------------------------------------------------------------
 rest_init(Req, Opts) ->
-    Service = resolve_service(Req, Opts),
-    TyCache = dict:new(),
-    {ok,
-     cowboy_req:compact(Req),
-     #state{service     = Service,
-	    types_cache = TyCache }}.
+    try 
+	Service = resolve_service(Req, Opts),
+	TyCache = dict:new(),
+	{ok,
+	 cowboy_req:compact(Req),
+	 #state{service     = Service,
+		types_cache = TyCache }}
+    catch
+	_ : Reason ->
+	    ?LOG_ERROR([ resolve_service_failed, 
+			 {reason, Reason}, 
+			 {stacktrace, erlang:get_stacktrace()}]),
+	    cowboy_req:reply(503, Req),
+	    {shutdown, Req, undefined}
+    end.
 
 %%------------------------------------------------------------------------
 %% Websocket paragraph
