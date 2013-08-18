@@ -17,19 +17,27 @@ get_value({Key, ConvType, Def}, JsxObj, undefined) ->
     get_value({Key, ConvType}, JsxObj, Def);
 get_value({Key, ConvType}, JsxObj, Def) ->
     V = get_value(Key, JsxObj, Def),
-    case ConvType of
-	atom ->
-	    to_atom(V);
-	atoms ->
-	    [to_atom(X) || X <- V];
-	list ->
-	    to_list(V);
-	lists ->
-	    [to_list(X) || X <- V];
-	binary ->
-	    to_binary(V);
-	integer ->
-	    to_integer(V)
+    if V == undefined; V == <<"null">> ->
+	    undefined;
+       true ->
+	    case ConvType of
+		atom ->
+		    to_atom(V);
+		atoms ->
+		    [to_atom(X) || X <- V];
+		list ->
+		    to_list(V);
+		lists ->
+		    [to_list(X) || X <- V];
+		binary ->
+		    to_binary(V);
+		integer ->
+		    to_integer(V);
+		iso8601_datetime ->
+		    parse_iso8601_datetime(V);
+		iso8601_duration ->
+		    parse_iso8601_duration(V)
+	    end
     end;
 get_value(Key, JsxObj, Def) when is_atom(Key) ->
     proplists:get_value(Key, JsxObj,
@@ -116,6 +124,10 @@ to_jsx(Tuple, Cache) when element(1, Cache) == dict ->
 		      fun(Type) -> exit({no_type_info, Type}) end),
     Jsx.
 
+to_jsx({datetime, _, _, _, _, _, _, _ } = DT, _C, _) ->
+    {format_iso8601_datetime(DT), _C};
+to_jsx({duration, _, _, _, _, _, _ } = DR, _C, _) ->
+    {format_iso8601_duration(DR), _C};
 to_jsx(Tuple, Cache, GetFields) when is_atom(element(1,Tuple)), 
 				     is_function(GetFields, 1) ->
     Type = element(1,Tuple),
@@ -132,7 +144,7 @@ to_jsx(Tuple, Cache, GetFields) when is_atom(element(1,Tuple)),
 	      [element(1, to_jsx(V, Cache, GetFields) ) 
 	       || V <- tuple_to_list(Tuple)] ),
     { Jsx, Cache1};
-	    
+
 to_jsx({X,Y}, _C,_) when is_integer(X),
 		   is_integer(Y) ->
     {[{x, X}, 
@@ -169,3 +181,100 @@ from_jsx_test() ->
 	      [{type,<<"rec2">>},{d,1},{e,<<"two">>}],
 	      [{type,<<"rec1">>},{a,2},{b,<<"four">>},{c,<<"five">>}]],
 	     dict:new(),GetFields).
+
+parse_iso8601_datetime(
+  <<YYYY:4/binary,"-",
+    MM:2/binary,"-",
+    DD:2/binary,"T",
+    HH:2/binary,":",
+    MN:2/binary,":",
+    SS:2/binary,".",MLS:3/binary,S,TZ:2/binary,":",_,_>>) ->
+    Year = to_integer(YYYY),
+    Month= to_integer(MM),
+    Day  = to_integer(DD),
+    Hour = to_integer(HH),
+    Min  = to_integer(MN),
+    Sec  = to_integer(SS),
+    Mls  = to_integer(MLS),
+    TZone= (case S of "-" -> -1; "+" -> 1 end) * to_integer(TZ),
+    make_datetime(Year, Month, Day, Hour, Min, Sec, Mls, TZone);
+parse_iso8601_datetime(
+  <<YYYY:4/binary,"-",
+    MM:2/binary,"-",
+    DD:2/binary,"T",
+    HH:2/binary,":",
+    MN:2/binary,":",
+    SS:2/binary,".", MLS:3/binary,"Z">>) ->
+    Year = to_integer(YYYY),
+    Month= to_integer(MM),
+    Day  = to_integer(DD),
+    Hour = to_integer(HH),
+    Min  = to_integer(MN),
+    Sec  = to_integer(SS),
+    Mls  = to_integer(MLS),
+    make_datetime(Year, Month, Day, Hour, Min, Sec, Mls, 0);
+parse_iso8601_datetime(
+  <<_YYYY:4/binary,"-",
+    _MM:2/binary,"-",
+    _DD:2/binary,"T",
+    _HH:2/binary,":",
+    _MN:2/binary,":",
+    _SS:2/binary,".", _MLS:3/binary>> = B) ->
+    parse_iso8601_datetime(<<B/binary,"Z">>);
+parse_iso8601_datetime(
+  <<_YYYY:4/binary,"-",
+    _MM:2/binary,"-",
+    _DD:2/binary,"T",
+    _HH:2/binary,":",
+    _MN:2/binary,":",
+    _SS:2/binary>> = B) ->
+    parse_iso8601_datetime(<<B/binary,".000Z">>);
+parse_iso8601_datetime(
+  <<YYYY:4/binary,"-",
+    MM:2/binary,"-",
+    DD:2/binary>>) ->
+    Year = to_integer(YYYY),
+    Month= to_integer(MM),
+    Day  = to_integer(DD),
+    make_datetime(Year, Month, Day, 0, 0, 0, 0, 0).
+
+make_datetime(Year, Month, Day, Hour, Min, Sec, Mls, TZone) ->
+    {{Year1, Month1, Day1}, 
+     {Hour1, Min1, Sec1}} = calendar:gregorian_seconds_to_datetime(
+	     calendar:datetime_to_gregorian_seconds(
+	       {{Year, Month, Day}, {Hour, Min, Sec}}) 
+	     + TZone * 3600),
+    {datetime, Year1, Month1, Day1, Hour1, Min1, Sec1, Mls }.
+
+parse_iso8601_duration(Dur) when is_binary(Dur) ->
+    parse_iso8601_duration(binary_to_list(Dur));
+parse_iso8601_duration(Dur) when is_list(Dur) ->
+    case re:run(Dur, 
+	   "P(\\d*Y)?(\\d*M)?(\\d*D)?T(\\d*H)?(\\d*M)?(\\d*S)?", 
+	   [{capture, all_but_first, list}]) of
+	{match, L } ->
+	    [Y,M,D,H,Mn,S] = 
+		[ case V of
+		      "" -> 0;
+		      _ -> 
+			  to_integer(
+			    lists:reverse(
+			      tl(lists:reverse(V)))) 
+		  end || V <- L ],
+	    {duration, Y, M, D, H, Mn, S};
+	nomatch ->
+	    exit({not_an_iso8601_duration, Dur})
+    end.
+
+format_iso8601_datetime(
+  {datetime, Year1, Month1, Day1, Hour1, Min1, Sec1, Mls } ) ->
+        iolist_to_binary(
+	  io_lib:format(
+	    "~.4.0w-~.2.0w-~.2.0wT~.2.0w:~.2.0w:~.2.0w.~.3.0wZ",
+	    [Year1, Month1, Day1, Hour1, Min1, Sec1, Mls] )).
+
+format_iso8601_duration({duration, Y, M, D, H, Mn, S}) ->
+    iolist_to_binary(
+      io_lib:format("P~wY~wM~wDT~wH~wM~wS", 
+		    [Y, M, D, H, Mn, S] ) ).
+
