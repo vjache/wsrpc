@@ -85,6 +85,7 @@
 			   __F;
 		       __T   -> __T
                    end || __F <- record_info(fields, Record)]}).
+-define(json_error(Msg), <<"{\"type\":\"error\", \"reason\":\"",Msg,"\"}">>).
 
 stream({Pid, Tag} = _From, Msg) ->
     Pid ! { {stream_continue, Tag, self()}, Msg}, ok.
@@ -112,38 +113,61 @@ handle(Req, #state{ types_cache = TyCache,
 		    service     = {gen_server, Pid}} = State) ->
     ?LOG_DEBUG([{http_handle, Req}]),
     %% 1. Get JSON request body
-    case cowboy_req:method(Req) of
-	{<<"POST">>, Req1} -> 
-	    #http_req{buffer = ReqJson} = Req,
-	    ?LOG_DEBUG([{msg_rcv, ReqJson}]),
-	    {RespJson, State1} = case jsx:decode(ReqJson) of
-				     {incomplete, _} ->
-					 { <<"{\"type\":\"error\", \"reason\":\"incomplete_json\"}">>, State};
-				     ReqJsx ->
-					 ?LOG_DEBUG([{msg_jsxed, ReqJsx}]),
-					 try jsx_util:from_jsx(
-					       ReqJsx, TyCache, 
-					       fun(Type)-> get_type(State, Type) end) of
-					     {Call, TyCache1} ->
-						 ?LOG_DEBUG([{jsx_mapped_to_record, Call}]),
-						 Resp = gen_server:call( Pid, Call, infinity),
-						 ?LOG_DEBUG([service_called_succesfully, {call, Call}, {pid, Pid} ]),
-						 make_reply(Resp, State#state{ types_cache = TyCache1})
-					 catch
-					     _:Reason ->
-						 ?LOG_ERROR([ jsx_to_record_failed, 
-							      {reason, Reason} ]),
-						 { <<"{\"type\":\"error\", \"reason\":\"json_to_record_failed\"}">>, State}
-					 end
-				 end,
-	    cowboy_req:reply( 200,
-			      [{<<"content-encoding">>, <<"utf-8">>}, 
-			       {<<"content-type">>,     <<"application/json">>}], 
-			      RespJson, Req1);
- 	{_, Req1} -> 
-	    State1 = State,
- 	    cowboy_req:reply(405, Req)
-    end,
+    HandleJsonCall = 
+	fun(ReqJson) ->
+		?LOG_DEBUG([{msg_rcv, ReqJson}]),
+		{RespJson, StatusCode,  State1} = 
+		    case jsx:decode(ReqJson) of
+			{incomplete, _} ->
+			    { ?json_error("incomplete_json"), State};
+			ReqJsx ->
+			    ?LOG_DEBUG([{msg_jsxed, ReqJsx}]),
+			    try jsx_util:from_jsx(
+				  ReqJsx, TyCache, 
+				  fun(Type)-> get_type(State, Type) end) of
+				{Call, TyCache1} when is_tuple(Call) ->
+				    ?LOG_DEBUG([{jsx_mapped_to_record, Call}]),
+				    Resp = gen_server:call( Pid, Call, infinity),
+				    ?LOG_DEBUG([service_called_succesfully, 
+						{call, Call}, {pid, Pid} ]),
+				    make_reply(Resp, State#state{ types_cache = TyCache1});
+				{_, _} ->
+				    ?LOG_ERROR([ jsx_to_record_failed, 
+						 {jsx, ReqJsx }]),
+				    { ?json_error("json_to_record_failed"), 400, State}
+			    catch
+				_:Reason ->
+				    ?LOG_ERROR([ jsx_to_record_failed, 
+						 {reason, Reason},
+						 {jsx, ReqJsx },
+						 {stacktrace, erlang:get_stacktrace()}]),
+				    { ?json_error("json_to_record_failed"), 400, State}
+			    end
+		    end,
+		cowboy_req:reply( 
+		  StatusCode,
+		  [{<<"content-encoding">>, <<"utf-8">>}, 
+		   {<<"content-type">>,     <<"application/json">>}], 
+		  RespJson, Req),
+		State1
+	end,		     
+    State1 = 
+	case cowboy_req:method(Req) of
+	    {<<"POST">>, Req1} -> 
+		#http_req{buffer = ReqJson} = Req,
+		HandleJsonCall(ReqJson);
+	    {<<"GET">>, Req1} ->
+		case cowboy_req:qs_val(<<"call">>, Req1) of
+		    {undefined, _} ->
+			cowboy_req:reply(404, Req),
+			State;
+		{ReqJson, _} ->
+			HandleJsonCall(ReqJson)
+		end;
+	    {_, Req1} -> 
+		cowboy_req:reply(405, Req),
+		State
+	end,
     {ok, Req1, State1}.
 
 terminate(Reason, _Req, _State) ->
@@ -282,7 +306,7 @@ make_reply(ReplyObj, #state{types_cache = TyCache} = State) ->
     {Jsx, TyCache1} = jsx_util:to_jsx(
 			ReplyObj, TyCache, 
 			fun(Type)-> get_type(State, Type) end),
-    {jsx:encode(Jsx), State#state{types_cache = TyCache1} }.
+    {jsx:encode(Jsx), 200, State#state{types_cache = TyCache1} }.
 
 lists_keyupsert(_Key, _N, [], Fun) ->
     case Fun(undefined) of
