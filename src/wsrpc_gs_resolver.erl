@@ -26,7 +26,7 @@
 -define(SERVER, ?MODULE). 
 
 -record(state, {}).
--record(echo, {text}).
+-record(echo, {text, dt}).
 -record(timer, {period, label}).
 
 
@@ -54,12 +54,14 @@ init([]) ->
 
 handle_call({get_type, Type}, _From, State) ->
     {reply, case Type of
-		echo  -> record_info(fields, echo);
+		echo  -> [text, {dt, iso8601_datetime}];
 		timer -> record_info(fields, timer)
 	    end, 
      State};
 handle_call(#echo{text = Text} = Msg, _From, State) ->
-    {reply, Msg#echo{text = <<Text/binary,Text/binary>>}, State};
+    { {Y,M,D}, {H,Mn,S} } = calendar:universal_time(),
+    {reply, Msg#echo{text = <<Text/binary,Text/binary>>,
+		    dt = {datetime, Y,M,D,H,Mn,S,0}}, State};
 handle_call(#timer{period = Per} = Msg, From, State) ->
     ?LOG_DEBUG([call_timer, Msg]),
     Res = timer:send_interval(
