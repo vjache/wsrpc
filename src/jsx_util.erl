@@ -128,6 +128,7 @@ to_jsx({datetime, _, _, _, _, _, _, _ } = DT, _C, _) ->
     {format_iso8601_datetime(DT), _C};
 to_jsx({duration, _, _, _, _, _, _ } = DR, _C, _) ->
     {format_iso8601_duration(DR), _C};
+
 to_jsx(Tuple, Cache, GetFields) when is_atom(element(1,Tuple)), 
 				     is_function(GetFields, 1) ->
     Type = element(1,Tuple),
@@ -140,10 +141,25 @@ to_jsx(Tuple, Cache, GetFields) when is_atom(element(1,Tuple)),
 		orelse exit(arity_mismatch),
 	    Cache1 = dict:store(Type, Fields, Cache)
     end,
-    Jsx = lists:zip([ type | [case F of {Name, _Type} -> Name; _ -> F end || F <- Fields] ], 
-	      [element(1, to_jsx(V, Cache, GetFields) ) 
-	       || V <- tuple_to_list(Tuple)] ),
-    { Jsx, Cache1};
+    {Jsx, Cache2} = lists:mapfoldl(
+		      fun({type, Val}, C) ->
+			   { {type, to_binary(Val)}, C};
+			 ({{FieldName, FieldType}, Val}, C) when is_atom(FieldName) ->
+			   case FieldType of
+			       list   -> { {FieldName, to_binary(Val)}, C};
+			       lists  -> { {FieldName, [to_binary(V)||V<-Val]}, C};
+			       binary -> { {FieldName, to_binary(Val)}, C};
+			       atom   -> { {FieldName, to_binary(Val)}, C};
+			       atoms  -> { {FieldName, [to_binary(V)||V<-Val]}, C};
+			       _ -> {Val1, C1} = to_jsx(Val, C, GetFields),
+				    { {FieldName, Val1}, C1}
+			   end;
+			 ({FieldName, Val} = Pair, C) when is_atom(FieldName) ->
+			      {Val1, C1} = to_jsx(Val, C, GetFields),
+			      { {FieldName, Val1}, C1}
+		      end, Cache1, 
+		      lists:zip([ type | Fields ], tuple_to_list(Tuple) ) ),
+    { Jsx, Cache2};
 
 to_jsx({X,Y}, _C,_) when is_integer(X),
 		   is_integer(Y) ->
