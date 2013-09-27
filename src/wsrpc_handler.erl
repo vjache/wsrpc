@@ -17,50 +17,6 @@
 
 -export([ stream/2 ]).
 
-%%////////////////////////////////////////////////////////////////////////////////
--record(http_req, {
-        %% Transport.
-        socket = undefined :: undefined | inet:socket(),
-        transport = undefined :: undefined | module(),
-        connection = keepalive :: keepalive | close,
-
-        %% Request.
-        pid = undefined :: pid(),
-        method = <<"GET">> :: binary(),
-        version,
-        peer = undefined :: undefined | {inet:ip_address(), inet:port_number()},
-        host = undefined :: undefined | binary(),
-        host_info,
-        port,
-        path = undefined :: binary(),
-        path_info,
-        qs = undefined :: binary(),
-        qs_vals = undefined :: undefined | list({binary(), binary() | true}),
-        fragment = undefined :: binary(),
-        bindings,
-        headers,
-        p_headers = [] :: [any()], %% @todo Improve those specs.
-        cookies = undefined :: undefined | [{binary(), binary()}],
-        meta = [] :: [{atom(), any()}],
-
-        %% Request body.
-        body_state = waiting :: waiting | done
-                | {stream, non_neg_integer(), fun(), any(), fun()},
-        multipart = undefined :: undefined | {non_neg_integer(), fun()},
-        buffer = <<>> :: binary(),
-
-        %% Response.
-        resp_compress = false :: boolean(),
-        resp_state = waiting :: locked | waiting | chunks | done,
-        resp_headers,
-        resp_body,
-
-        %% Functions.
-        onresponse
-}).
-
-%%////////////////////////////////////////////////////////////////////////////////
-
 %% WebSocket Handler state
 -record(state, {service :: {gen_server, pid()} | 
 			   {mfa, 
@@ -101,8 +57,8 @@ init({_Any, http}, Req, Opts) ->
 			  {upgrade, protocol, cowboy_websocket} 
 		  end,
     case cowboy_req:header(<<"upgrade">>, Req) of
-	{undefined, _Req2} ->
-	    rest_init(Req, Opts);
+	{undefined, Req2} ->
+	    rest_init(Req2, Opts);
 	{<<"websocket">>, _Req2} ->
 	    DoWsUpgrade();
 	{<<"WebSocket">>, _Req2} ->
@@ -114,7 +70,7 @@ handle(Req, #state{ types_cache = TyCache,
     ?LOG_DEBUG([{http_handle, Req}]),
     %% 1. Get JSON request body
     HandleJsonCall = 
-	fun(ReqJson) ->
+	fun(ReqN, ReqJson) ->
 		?LOG_DEBUG([{msg_rcv, ReqJson}]),
 		{RespJson, StatusCode,  State1} = 
 		    case jsx:decode(ReqJson) of
@@ -144,31 +100,32 @@ handle(Req, #state{ types_cache = TyCache,
 				    { ?json_error("json_to_record_failed"), 400, State}
 			    end
 		    end,
-		cowboy_req:reply( 
-		  StatusCode,
-		  [{<<"content-encoding">>, <<"utf-8">>}, 
-		   {<<"content-type">>,     <<"application/json">>}], 
-		  RespJson, Req),
-		State1
+		{ok, ReqN1} = 
+		    cowboy_req:reply( 
+		      StatusCode,
+		      [{<<"content-encoding">>, <<"utf-8">>}, 
+		       {<<"content-type">>,     <<"application/json">>}], 
+		      RespJson, ReqN),
+		{State1, ReqN1}
 	end,		     
-    State1 = 
+    {State1, ReqZ} = 
 	case cowboy_req:method(Req) of
 	    {<<"POST">>, Req1} -> 
-		#http_req{buffer = ReqJson} = Req,
-		HandleJsonCall(ReqJson);
+		{ok, ReqJson, Req2} = cowboy_req:body(Req1),
+		HandleJsonCall(Req2, ReqJson);
 	    {<<"GET">>, Req1} ->
 		case cowboy_req:qs_val(<<"call">>, Req1) of
-		    {undefined, _} ->
-			cowboy_req:reply(404, Req),
-			State;
-		{ReqJson, _} ->
-			HandleJsonCall(ReqJson)
+		    {undefined, Req2} ->
+			{ok, Req3} = cowboy_req:reply(404, Req2),
+			{State, Req3};
+		    {ReqJson, Req2} ->
+			HandleJsonCall(Req2, ReqJson)
 		end;
 	    {_, Req1} -> 
-		cowboy_req:reply(405, Req),
-		State
+		{ok, Req2} = cowboy_req:reply(405, Req1),
+		{State, Req2}
 	end,
-    {ok, Req1, State1}.
+    {ok, ReqZ, State1}.
 
 terminate(Reason, _Req, _State) ->
     ?LOG_DEBUG([http_terminate, 
@@ -181,10 +138,10 @@ terminate(Reason, _Req, _State) ->
 %%------------------------------------------------------------------------
 rest_init(Req, Opts) ->
     try 
-	Service = resolve_service(Req, Opts),
+	{Service, Req1} = resolve_service(Req, Opts),
 	TyCache = dict:new(),
 	{ok,
-	 cowboy_req:compact(Req),
+	 Req1,
 	 #state{service     = Service,
 		types_cache = TyCache }}
     catch
@@ -201,11 +158,11 @@ rest_init(Req, Opts) ->
 %%------------------------------------------------------------------------
 
 resolve_service(Req, Opts) ->
-    {ServicePath, _} = cowboy_req:path_info(Req),
+    {ServicePath, Req1} = cowboy_req:path_info(Req),
     RMod    = proplists:get_value(resolver, Opts, wsrpc_gs_resolver),
     Service = RMod:resolve(ServicePath),
     ?LOG_DEBUG([{service_resolved, ServicePath}, {options, Opts}]),
-    Service.
+    {Service, Req1}.
 
 websocket_init(_Any, Req, Opts) ->
     Service = resolve_service(Req, Opts),
