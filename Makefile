@@ -5,7 +5,7 @@ all: deps compile
 deps:
 	@$(REBAR) get-deps
 
-compile:
+compile: deps
 	@$(REBAR) compile
 
 test: force
