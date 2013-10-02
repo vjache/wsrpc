@@ -21,6 +21,8 @@ get_value({Key, ConvType}, JsxObj, Def) ->
 	    undefined;
        true ->
 	    case ConvType of
+		jsx_data ->
+		    V;
 		atom ->
 		    to_atom(V);
 		atoms ->
@@ -101,7 +103,7 @@ from_jsx([{_,_}|_]=Jsx, Cache, GetFields) when is_function(GetFields, 1)  ->
 		    Fields = GetFields(Type),
 		    Cache1 = dict:store(Type, Fields, Cache)
 	    end,
-	    Values = [ jsx_util:get_value(F, Jsx) || F <- Fields],
+	    Values = [ get_value(F, Jsx) || F <- Fields],
 	    {Values1, Cache2} = 
 		lists:mapfoldl(
 		  fun(V, C) -> from_jsx(V, C, GetFields) end, 
@@ -128,6 +130,8 @@ to_jsx({datetime, _, _, _, _, _, _, _ } = DT, _C, _) ->
     {format_iso8601_datetime(DT), _C};
 to_jsx({duration, _, _, _, _, _, _ } = DR, _C, _) ->
     {format_iso8601_duration(DR), _C};
+to_jsx({jsx_data, Jsx }, _C, _) ->
+    {Jsx, _C};
 
 to_jsx(Tuple, Cache, GetFields) when is_atom(element(1,Tuple)), 
 				     is_function(GetFields, 1) ->
@@ -146,15 +150,16 @@ to_jsx(Tuple, Cache, GetFields) when is_atom(element(1,Tuple)),
 			   { {type, to_binary(Val)}, C};
 			 ({{FieldName, FieldType}, Val}, C) when is_atom(FieldName) ->
 			   case FieldType of
-			       list   -> { {FieldName, to_binary(Val)}, C};
-			       lists  -> { {FieldName, [to_binary(V)||V<-Val]}, C};
-			       binary -> { {FieldName, to_binary(Val)}, C};
-			       atom   -> { {FieldName, to_binary(Val)}, C};
-			       atoms  -> { {FieldName, [to_binary(V)||V<-Val]}, C};
+			       list     -> { {FieldName, to_binary(Val)}, C};
+			       lists    -> { {FieldName, [to_binary(V)||V<-Val]}, C};
+			       binary   -> { {FieldName, to_binary(Val)}, C};
+			       atom     -> { {FieldName, to_binary(Val)}, C};
+			       atoms    -> { {FieldName, [to_binary(V)||V<-Val]}, C};
+			       jsx_data -> { {FieldName, Val}, C};
 			       _ -> {Val1, C1} = to_jsx(Val, C, GetFields),
 				    { {FieldName, Val1}, C1}
 			   end;
-			 ({FieldName, Val} = Pair, C) when is_atom(FieldName) ->
+			 ({FieldName, Val}, C) when is_atom(FieldName) ->
 			      {Val1, C1} = to_jsx(Val, C, GetFields),
 			      { {FieldName, Val1}, C1}
 		      end, Cache1, 
