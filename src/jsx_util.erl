@@ -10,6 +10,18 @@
 	 from_jsx/3,
 	 from_jsx/2]).
 
+-export([ format_iso8601_datetime/1, parse_iso8601_datetime/1 ]).
+
+-record(datetime,
+        {year  = 0 :: non_neg_integer(),
+         month = 0 :: non_neg_integer(),
+         day   = 0 :: non_neg_integer(),
+         hour  = 0 :: non_neg_integer(),
+         min   = 0 :: non_neg_integer(),
+         sec   = 0 :: non_neg_integer(),
+         mls   = 0 :: non_neg_integer(),
+         tz    = 0 :: non_neg_integer()}).
+
 get_value(Key, JsxObj) ->
     get_value(Key, JsxObj, undefined).
 
@@ -126,7 +138,7 @@ to_jsx(Tuple, Cache) when element(1, Cache) == dict ->
 		      fun(Type) -> exit({no_type_info, Type}) end),
     Jsx.
 
-to_jsx({datetime, _, _, _, _, _, _, _ } = DT, _C, _) ->
+to_jsx(#datetime{} = DT, _C, _) ->
     {format_iso8601_datetime(DT), _C};
 to_jsx({duration, _, _, _, _, _, _ } = DR, _C, _) ->
     {format_iso8601_duration(DR), _C};
@@ -209,7 +221,7 @@ parse_iso8601_datetime(
     DD:2/binary,"T",
     HH:2/binary,":",
     MN:2/binary,":",
-    SS:2/binary,".",MLS:3/binary,S,TZ:2/binary,":",_,_>>) ->
+    SS:2/binary,".",MLS:3/binary,S,TZ:2/binary>>) ->
     Year = to_integer(YYYY),
     Month= to_integer(MM),
     Day  = to_integer(DD),
@@ -217,7 +229,7 @@ parse_iso8601_datetime(
     Min  = to_integer(MN),
     Sec  = to_integer(SS),
     Mls  = to_integer(MLS),
-    TZone= (case S of "-" -> -1; "+" -> 1 end) * to_integer(TZ),
+    TZone= (case S of $- -> -1; $+ -> 1 end) * to_integer(TZ),
     make_datetime(Year, Month, Day, Hour, Min, Sec, Mls, TZone);
 parse_iso8601_datetime(
   <<YYYY:4/binary,"-",
@@ -260,12 +272,7 @@ parse_iso8601_datetime(
     make_datetime(Year, Month, Day, 0, 0, 0, 0, 0).
 
 make_datetime(Year, Month, Day, Hour, Min, Sec, Mls, TZone) ->
-    {{Year1, Month1, Day1}, 
-     {Hour1, Min1, Sec1}} = calendar:gregorian_seconds_to_datetime(
-	     calendar:datetime_to_gregorian_seconds(
-	       {{Year, Month, Day}, {Hour, Min, Sec}}) 
-	     + TZone * 3600),
-    {datetime, Year1, Month1, Day1, Hour1, Min1, Sec1, Mls }.
+    #datetime{year = Year, month = Month, day = Day, hour = Hour, min = Min, sec = Sec, mls = Mls, tz = TZone }.
 
 parse_iso8601_duration(Dur) when is_binary(Dur) ->
     parse_iso8601_duration(binary_to_list(Dur));
@@ -288,11 +295,11 @@ parse_iso8601_duration(Dur) when is_list(Dur) ->
     end.
 
 format_iso8601_datetime(
-  {datetime, Year1, Month1, Day1, Hour1, Min1, Sec1, Mls } ) ->
+  #datetime{year = Year, month = Month, day = Day, hour = Hour, min = Min, sec = Sec, mls = Mls, tz = TZone }) ->
         iolist_to_binary(
 	  io_lib:format(
-	    "~.4.0w-~.2.0w-~.2.0wT~.2.0w:~.2.0w:~.2.0w.~.3.0wZ",
-	    [Year1, Month1, Day1, Hour1, Min1, Sec1, Mls] )).
+	    "~.4.0w-~.2.0w-~.2.0wT~.2.0w:~.2.0w:~.2.0w.~.3.0w~s~.2.0w",
+	    [Year, Month, Day, Hour, Min, Sec, Mls, if TZone >= 0 -> "+"; TZone =< 0 -> "-" end, abs(TZone)] )).
 
 format_iso8601_duration({duration, Y, M, D, H, Mn, S}) ->
     iolist_to_binary(
