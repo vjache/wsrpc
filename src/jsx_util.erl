@@ -67,9 +67,9 @@ get_values(Keys, JsxObj) when is_list(Keys) ->
 to_atom(A) when is_atom(A) ->
     A;
 to_atom(B) when is_binary(B) ->
-    binary_to_existing_atom(B, latin1);
+    binary_to_atom(B, latin1);
 to_atom(L) when is_list(L) ->
-    list_to_existing_atom(L).
+    list_to_atom(L).
 
 to_list(L) when is_list(L) ->
     L;
@@ -108,7 +108,8 @@ from_jsx([{_,_}|_]=Jsx, Cache, GetFields) when is_function(GetFields, 1)  ->
 	undefined ->
 	    {Jsx, Cache};
 	TypeRaw ->
-	    Type = binary_to_existing_atom(TypeRaw, latin1),
+	    Type = try binary_to_existing_atom(TypeRaw, latin1)
+		   catch _:badarg -> exit({unknown_type, TypeRaw}) end,
 	    case dict:find(Type, Cache) of
 		{ok, Fields} -> Cache1 = Cache;
 		error ->
