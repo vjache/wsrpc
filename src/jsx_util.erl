@@ -28,29 +28,32 @@ get_value(Key, JsxObj) ->
 get_value({Key, ConvType, Def}, JsxObj, undefined) ->
     get_value({Key, ConvType}, JsxObj, Def);
 get_value({Key, ConvType}, JsxObj, Def) ->
-    V = get_value(Key, JsxObj, Def),
-    if V == undefined; V == <<"null">> ->
-	    undefined;
-       true ->
-	    case ConvType of
-		jsx_data ->
-		    V;
-		atom ->
-		    to_atom(V);
-		atoms ->
-		    [to_atom(X) || X <- V];
-		list ->
-		    to_list(V);
-		lists ->
-		    [to_list(X) || X <- V];
-		binary ->
-		    to_binary(V);
-		integer ->
-		    to_integer(V);
-		iso8601_datetime ->
-		    parse_iso8601_datetime(V);
-		iso8601_duration ->
-		    parse_iso8601_duration(V)
+    case get_value(Key, JsxObj, Def) of
+	[{_,_}|_] = V -> V;
+	V ->
+	    if V == undefined; V == <<"null">> ->
+		    undefined;
+	       true ->
+		    case ConvType of
+			jsx_data ->
+			    V;
+			atom ->
+			    to_atom(V);
+			atoms ->
+			    [to_atom(X) || X <- V];
+			list ->
+			    to_list(V);
+			lists ->
+			    [to_list(X) || X <- V];
+			binary ->
+			    to_binary(V);
+			integer ->
+			    to_integer(V);
+			iso8601_datetime ->
+			    parse_iso8601_datetime(V);
+			iso8601_duration ->
+			    parse_iso8601_duration(V)
+		    end
 	    end
     end;
 get_value(Key, JsxObj, Def) when is_atom(Key) ->
@@ -59,7 +62,10 @@ get_value(Key, JsxObj, Def) when is_atom(Key) ->
 	atom_to_binary(Key,latin1), 
 	JsxObj, Def));
 get_value(Key, JsxObj, Def) when is_binary(Key) ->
-    proplists:get_value(atom_to_binary(Key, latin1), JsxObj, Def).
+    proplists:get_value(Key, JsxObj,
+      proplists:get_value(
+	binary_to_atom(Key, latin1), 
+	JsxObj, Def)).
 
 get_values(Keys, JsxObj) when is_list(Keys) ->
     [get_value(Key, JsxObj) || Key <- Keys].
@@ -161,17 +167,28 @@ to_jsx(Tuple, Cache, GetFields) when is_atom(element(1,Tuple)),
     {Jsx, Cache2} = lists:mapfoldl(
 		      fun({type, Val}, C) ->
 			   { {type, to_binary(Val)}, C};
-			 ({{FieldName, FieldType}, Val}, C) when is_atom(FieldName) ->
-			   case FieldType of
-			       list     -> { {FieldName, to_binary(Val)}, C};
-			       lists    -> { {FieldName, [to_binary(V)||V<-Val]}, C};
-			       binary   -> { {FieldName, to_binary(Val)}, C};
-			       atom     -> { {FieldName, to_binary(Val)}, C};
-			       atoms    -> { {FieldName, [to_binary(V)||V<-Val]}, C};
-			       jsx_data -> { {FieldName, Val}, C};
-			       _ -> {Val1, C1} = to_jsx(Val, C, GetFields),
-				    { {FieldName, Val1}, C1}
-			   end;
+			 ({{FieldName, FieldType} = Finfo, Val}, C) 
+			    when is_atom(FieldName) ->
+			      if is_atom(element(1,Val)) ->
+				      {Val1, C1} = to_jsx(Val, C, GetFields),
+				      { {FieldName, Val1}, C1};
+				 true ->
+				      try case FieldType of
+					      list     -> { {FieldName, to_binary(Val)}, C};
+					      lists    -> { {FieldName, [to_binary(V)||V<-Val]}, C};
+					      binary   -> { {FieldName, to_binary(Val)}, C};
+					      atom     -> { {FieldName, to_binary(Val)}, C};
+					      atoms    -> { {FieldName, [to_binary(V)||V<-Val]}, C};
+					      jsx_data -> { {FieldName, Val}, C};
+					      _ -> {Val1, C1} = to_jsx(Val, C, GetFields),
+						   { {FieldName, Val1}, C1}
+					  end
+				      catch _:Reason ->
+					      exit({prop_failed_to_jsx, 
+						    {Type, Finfo}, 
+						    erlang:get_stacktrace()}) 
+				      end
+			      end;
 			 ({FieldName, Val}, C) when is_atom(FieldName) ->
 			      {Val1, C1} = to_jsx(Val, C, GetFields),
 			      { {FieldName, Val1}, C1}
