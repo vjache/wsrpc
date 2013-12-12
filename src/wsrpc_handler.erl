@@ -67,29 +67,21 @@ init({_Any, http}, Req, Opts) ->
 
 handle(Req, #state{ types_cache = TyCache, 
 		    service     = {gen_server, Pid}} = State) ->
-    ?LOG_DEBUG([{http_handle, Req}]),
     %% 1. Get JSON request body
     HandleJsonCall = 
 	fun(ReqN, ReqJson) ->
-		?LOG_DEBUG([{msg_rcv, ReqJson}]),
 		{RespJson, StatusCode,  State1} = 
 		    case jsx:decode(ReqJson) of
 			{incomplete, _} ->
 			    { ?json_error("incomplete_json"), State};
 			ReqJsx ->
-			    ?LOG_DEBUG([{msg_jsxed, ReqJsx}]),
 			    try jsx_util:from_jsx(
 				  ReqJsx, TyCache, 
 				  fun(Type)-> get_type(State, Type) end) of
 				{Call, TyCache1} when is_tuple(Call) ->
-				    ?LOG_DEBUG([{jsx_mapped_to_record, Call}]),
 				    Resp = gen_server:call( Pid, Call, infinity),
-				    ?LOG_DEBUG([service_called_succesfully, 
-						{call, Call}, {pid, Pid} ]),
 				    make_reply(Resp, State#state{ types_cache = TyCache1});
 				{_, _} ->
-				    ?LOG_ERROR([ jsx_to_record_failed, 
-						 {jsx, ReqJsx }]),
 				    { ?json_error("json_to_record_failed"), 400, State}
 			    catch
 				_:Reason ->
@@ -129,8 +121,7 @@ handle(Req, #state{ types_cache = TyCache,
 
 terminate(Reason, _Req, _State) ->
     ?LOG_DEBUG([http_terminate, 
-	       {reason, Reason},
-	       {state, _State}]),
+	       {reason, Reason}]),
      ok.
 
 %%------------------------------------------------------------------------
