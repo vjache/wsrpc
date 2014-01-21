@@ -287,7 +287,13 @@ parse_iso8601_datetime(
     Year = to_integer(YYYY),
     Month= to_integer(MM),
     Day  = to_integer(DD),
-    make_datetime(Year, Month, Day, 0, 0, 0, 0, 0).
+    make_datetime(Year, Month, Day, 0, 0, 0, 0, 0);
+parse_iso8601_datetime(<<"undefined">>) ->
+    undefined;
+parse_iso8601_datetime(<<"null">>) ->
+    undefined.
+
+
 
 make_datetime(Year, Month, Day, Hour, Min, Sec, Mls, TZone) ->
     #datetime{year = Year, month = Month, day = Day, hour = Hour, min = Min, sec = Sec, mls = Mls, tz = TZone }.
