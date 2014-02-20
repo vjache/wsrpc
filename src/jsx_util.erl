@@ -194,7 +194,8 @@ to_jsx(Tuple, Cache, GetFields) when is_atom(element(1,Tuple)),
 			      { {FieldName, Val1}, C1}
 		      end, Cache1, 
 		      lists:zip([ type | Fields ], tuple_to_list(Tuple) ) ),
-    { Jsx, Cache2};
+    Jsx1 = filter_undefined(Jsx),
+    { Jsx1, Cache2};
 
 to_jsx({X,Y}, _C,_) when is_integer(X),
 		   is_integer(Y) ->
@@ -208,6 +209,15 @@ to_jsx(L, _C, _F) when is_list(L) ->
     lists:mapfoldl(fun(E,A)-> to_jsx(E,A,_F) end, _C, L);
 to_jsx(N, _C, _) when is_number(N) ->
     {N, _C}.
+
+filter_undefined(Jsx) ->
+    [ {K,
+       if V == <<"undefined">> 
+	  orelse 
+	  V == undefined ->
+	       null;
+	  true -> V
+       end } || {K,V} <- Jsx].
 
 to_jsx_test() ->
     GetFields = fun(rec1) ->
