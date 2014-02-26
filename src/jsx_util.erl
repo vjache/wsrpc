@@ -31,7 +31,9 @@ get_value({Key, ConvType}, JsxObj, Def) ->
     case get_value(Key, JsxObj, Def) of
 	[{_,_}|_] = V -> V;
 	V ->
-	    if V == undefined; V == <<"null">> ->
+	    if V == undefined; 
+	       V == <<"null">>;
+	       V == null ->
 		    undefined;
 	       true ->
 		    case ConvType of
