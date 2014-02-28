@@ -31,7 +31,8 @@ get_value({Key, ConvType}, JsxObj, Def) ->
     case get_value(Key, JsxObj, Def) of
 	[{_,_}|_] = V -> V;
 	V ->
-	    if V == undefined; 
+	    if V == <<"undefined">>;
+	       V == undefined; 
 	       V == <<"null">>;
 	       V == null ->
 		    undefined;
@@ -169,6 +170,7 @@ to_jsx(Tuple, Cache, GetFields) when is_atom(element(1,Tuple)),
     {Jsx, Cache2} = lists:mapfoldl(
 		      fun({type, Val}, C) ->
 			   { {type, to_binary(Val)}, C};
+			 ({_Finfo, undefined}, C) -> { null, C};
 			 ({{FieldName, FieldType} = Finfo, Val}, C) 
 			    when is_atom(FieldName) ->
 			      if is_atom(element(1,Val)) ->
@@ -177,7 +179,8 @@ to_jsx(Tuple, Cache, GetFields) when is_atom(element(1,Tuple)),
 				 true ->
 				      try case FieldType of
 					      list     -> { {FieldName, to_binary(Val)}, C};
-					      lists    -> { {FieldName, [to_binary(V)||V<-Val]}, C};
+					      lists    when is_list(Val) -> 
+						  { {FieldName, [ to_binary(V) || V <- Val ] }, C};
 					      binary   -> { {FieldName, to_binary(Val)}, C};
 					      atom     -> { {FieldName, to_binary(Val)}, C};
 					      atoms    -> { {FieldName, [to_binary(V)||V<-Val]}, C};
